@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc",
     "btc:start": "tsx src/btc-trader/index.ts",
+    "btc:start:v1": "BTC_STRATEGY=v1 tsx src/btc-trader/index.ts",
+    "btc:start:v2": "BTC_STRATEGY=v2 tsx src/btc-trader/index.ts",
     "btc:status": "tsx src/btc-trader/index.ts --status",
     "btc:backtest": "tsx src/btc-trader/backtest/run-backtest.ts",
     "btc:backtest:1d": "tsx src/btc-trader/backtest/run-backtest.ts 1",

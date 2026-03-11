@@ -57,8 +57,12 @@ Please follow these steps in order:
    sleep 2
    Confirm nothing is running: ps aux | grep "btc-trader" | grep -v grep
 
-10. Start the bot in background:
-    cd ~/projects/btc-trader && nohup npm run btc:start > logs/btc-trader.log 2>&1 &
+10. Start the bot in background (choose a strategy):
+    For V1 (original ensemble):
+    cd ~/projects/btc-trader && nohup npm run btc:start:v1 > logs/btc-trader.log 2>&1 &
+    For V2 (late-window sniper -- fewer trades, bigger bets, cheap tokens only):
+    cd ~/projects/btc-trader && nohup npm run btc:start:v2 > logs/btc-trader.log 2>&1 &
+    If unsure, ask which strategy to use. See STRATEGY_V2.md for details.
 
 11. Wait 30 seconds, then verify startup:
     tail -30 ~/projects/btc-trader/logs/btc-trader.log
@@ -77,6 +81,7 @@ Report back with:
 - npm install result (up to date, or packages added)
 - Polymarket CLI status (installed, version)
 - VPN status (blocked or not, country)
+- Strategy (v1 ensemble or v2 sniper)
 - Adapter (polymarket or dry-run)
 - Balance (available USDC.e)
 - Daemon status (running, PID)

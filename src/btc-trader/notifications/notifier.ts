@@ -70,7 +70,7 @@ function send(type: BtcNotificationType, title: string, description: string, col
     title,
     description: description.substring(0, 4096),
     color: colorOverride ?? EMBED_COLORS[type] ?? 0x95a5a6,
-    footer: { text: 'BTC 5-Min Trader' },
+    footer: { text: btcConfig.notifications.strategyLabel },
     timestamp: new Date().toISOString(),
   }).catch((err) => {
     logger.error(`BTC webhook failed: ${err.message}`);
@@ -90,15 +90,17 @@ export function notifyDecision(
   orderPrice: number,
   orderSize: number,
   subDecisions?: StrategyDecision[],
+  balanceBefore?: number,
 ): void {
   if (decision.direction === 'abstain') return;
 
+  const strategy = btcConfig.trading.strategy;
   const dir = decision.direction.toUpperCase();
   const conf = (decision.confidence * 100).toFixed(0);
-  const ret = features.btcReturn1m !== 0 ? features.btcReturn1m : features.btcReturn5m;
-  const retLabel = features.btcReturn1m !== 0 ? '1m' : '5m';
-  const retSign = ret >= 0 ? '+' : '';
+  const ret1m = features.btcReturn1m;
+  const ret5m = features.btcReturn5m;
   const cost = (orderSize * orderPrice).toFixed(2);
+  const kelly = decision.suggestedSize ?? 0;
 
   let voters = '';
   if (subDecisions) {
@@ -109,47 +111,72 @@ export function notifyDecision(
   }
 
   const lines = [
-    `BTC $${features.btcPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })} | ${retSign}${(ret * 100).toFixed(3)}% (${retLabel}) | ${features.secondsIntoWindow}s into window`,
-    `Market: up ${(features.impliedProbUp * 100).toFixed(0)}% / down ${(features.impliedProbDown * 100).toFixed(0)}%`,
-    `Cost: $${cost} (${Math.round(orderSize)} tokens @ $${orderPrice.toFixed(2)})`,
+    `**Strategy: ${strategy.toUpperCase()}** | BTC $${features.btcPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+    `Ret: 1m ${ret1m >= 0 ? '+' : ''}${(ret1m * 100).toFixed(4)}% | 5m ${ret5m >= 0 ? '+' : ''}${(ret5m * 100).toFixed(4)}%`,
+    `Market: up ${(features.impliedProbUp * 100).toFixed(1)}% / down ${(features.impliedProbDown * 100).toFixed(1)}% | Vol: ${(features.btcVolatility5m * 10000).toFixed(1)}bps`,
+    `Token: $${orderPrice.toFixed(3)} | ${Math.round(orderSize)} tokens | Cost: $${cost} | Kelly: ${(kelly * 100).toFixed(1)}%`,
+    `Window: ${features.secondsIntoWindow}s in | ${300 - features.secondsIntoWindow}s remaining`,
   ];
-  if (voters) lines.push(`Strategies: ${voters}`);
+  if (balanceBefore !== undefined) {
+    lines.push(`Balance before: $${balanceBefore.toFixed(2)} | Bet: ${((parseFloat(cost) / balanceBefore) * 100).toFixed(1)}% of bankroll`);
+  }
+  if (voters) lines.push(`Signals: ${voters}`);
 
-  send('TRADE_ENTRY', `BUY ${dir} | ${conf}% confidence`, lines.join('\n'));
+  send('TRADE_ENTRY', `[${strategy.toUpperCase()}] BUY ${dir} | ${conf}% conf`, lines.join('\n'));
 }
 
 // ---------------------------------------------------------------------------
 // Fill: after order is confirmed filled
 // ---------------------------------------------------------------------------
 export function notifyFill(result: TradeResult): void {
+  const strategy = btcConfig.trading.strategy;
   if (!result.filled) {
-    send('ERROR', 'ORDER FAILED', `${result.order.direction.toUpperCase()} order did not fill`);
+    send('ERROR', `[${strategy.toUpperCase()}] ORDER FAILED`, `${result.order.direction.toUpperCase()} order did not fill`);
     return;
   }
   const dir = result.order.direction.toUpperCase();
   const cost = (result.fillSize * result.fillPrice).toFixed(2);
   const fee = result.fee > 0 ? ` | Fee: $${result.fee.toFixed(2)}` : '';
+  const payout = result.fillSize.toFixed(2);
+  const payoutRatio = (1 / result.fillPrice).toFixed(2);
   send(
     'TRADE_FILL',
-    `FILLED ${dir}`,
-    `${Math.round(result.fillSize)} tokens @ $${result.fillPrice.toFixed(2)} ($${cost})${fee}`,
+    `[${strategy.toUpperCase()}] FILLED ${dir}`,
+    `${Math.round(result.fillSize)} tokens @ $${result.fillPrice.toFixed(2)} ($${cost})${fee}\nIf win: payout $${payout} (${payoutRatio}x return)`,
   );
 }
 
 // ---------------------------------------------------------------------------
 // Skip: when we evaluate a window and abstain (first checkpoint only)
 // ---------------------------------------------------------------------------
-export function notifySkip(features: FeatureVector, reason: string): void {
-  const ret = features.btcReturn1m !== 0 ? features.btcReturn1m : features.btcReturn5m;
-  const retLabel = features.btcReturn1m !== 0 ? '1m' : '5m';
-  const retSign = ret >= 0 ? '+' : '';
+export function notifySkip(features: FeatureVector, reason: string, subDecisions?: StrategyDecision[]): void {
+  const strategy = btcConfig.trading.strategy;
+  const ret1m = features.btcReturn1m;
+  const ret5m = features.btcReturn5m;
 
-  const shortReason = reason.length > 120 ? reason.substring(0, 120) + '...' : reason;
+  const shortReason = reason.length > 200 ? reason.substring(0, 200) + '...' : reason;
+
+  let signalSummary = '';
+  if (subDecisions) {
+    const fired = subDecisions.filter((d) => d.direction !== 'abstain');
+    const abstained = subDecisions.filter((d) => d.direction === 'abstain');
+    if (fired.length > 0) {
+      signalSummary = `\nFired: ${fired.map((d) => `${d.strategy} ${d.direction} ${(d.confidence * 100).toFixed(0)}%`).join(', ')}`;
+    }
+    signalSummary += `\nAbstained: ${abstained.map((d) => d.strategy).join(', ')}`;
+  }
+
+  const lines = [
+    `1m ${ret1m >= 0 ? '+' : ''}${(ret1m * 100).toFixed(4)}% | 5m ${ret5m >= 0 ? '+' : ''}${(ret5m * 100).toFixed(4)}%`,
+    `Market: up ${(features.impliedProbUp * 100).toFixed(1)}% / down ${(features.impliedProbDown * 100).toFixed(1)}% | ${features.secondsIntoWindow}s in`,
+    `Reason: ${shortReason}`,
+  ];
+  if (signalSummary) lines.push(signalSummary.trim());
 
   send(
     'TRADE_SKIP',
-    `SKIP | BTC $${features.btcPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
-    `${retSign}${(ret * 100).toFixed(3)}% (${retLabel}) | ${features.secondsIntoWindow}s in | up ${(features.impliedProbUp * 100).toFixed(0)}% / down ${(features.impliedProbDown * 100).toFixed(0)}%\n${shortReason}`,
+    `[${strategy.toUpperCase()}] SKIP | BTC $${features.btcPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+    lines.join('\n'),
   );
 }
 
@@ -167,19 +194,23 @@ export function notifyResolution(opts: {
   todayLosses: number;
   todayPnl: number;
 }): void {
+  const strategy = btcConfig.trading.strategy;
   const won = opts.direction === opts.outcome;
   const cost = (opts.entryPrice * opts.size).toFixed(2);
   const payout = won ? opts.size.toFixed(2) : '0.00';
   const pnlSign = opts.pnl >= 0 ? '+' : '';
+  const payoutRatio = won ? (1 / opts.entryPrice).toFixed(2) : '0.00';
+  const totalTrades = opts.todayWins + opts.todayLosses;
+  const winRate = totalTrades > 0 ? ((opts.todayWins / totalTrades) * 100).toFixed(0) : '0';
 
   const title = won
-    ? `WIN | Bought ${opts.direction.toUpperCase()} @ $${opts.entryPrice.toFixed(2)}`
-    : `LOSS | Bought ${opts.direction.toUpperCase()} @ $${opts.entryPrice.toFixed(2)}`;
+    ? `[${strategy.toUpperCase()}] WIN | ${opts.direction.toUpperCase()} @ $${opts.entryPrice.toFixed(2)}`
+    : `[${strategy.toUpperCase()}] LOSS | ${opts.direction.toUpperCase()} @ $${opts.entryPrice.toFixed(2)}`;
 
   const lines = [
-    `Resolved: **${opts.outcome.toUpperCase()}** | P&L: **${pnlSign}$${opts.pnl.toFixed(2)}**`,
-    `Cost: $${cost} | Payout: $${payout}`,
-    `Balance: $${opts.balance.toFixed(2)} | Today: ${opts.todayWins}W/${opts.todayLosses}L (${opts.todayPnl >= 0 ? '+' : ''}$${opts.todayPnl.toFixed(2)})`,
+    `Outcome: **${opts.outcome.toUpperCase()}** | P&L: **${pnlSign}$${opts.pnl.toFixed(2)}**`,
+    `Cost: $${cost} | Payout: $${payout}${won ? ` (${payoutRatio}x)` : ''}`,
+    `Balance: **$${opts.balance.toFixed(2)}** | Today: ${opts.todayWins}W/${opts.todayLosses}L (${winRate}% WR, ${opts.todayPnl >= 0 ? '+' : ''}$${opts.todayPnl.toFixed(2)})`,
   ];
 
   send('WINDOW_RESOLVED', title, lines.join('\n'), won ? COLOR_WIN : COLOR_LOSS);
@@ -196,15 +227,26 @@ export function notifyDailySummary(stats: {
   totalPnl: number;
   balance: number;
 }): void {
+  const strategy = btcConfig.trading.strategy;
   const winRate = stats.windowsTraded > 0
     ? ((stats.wins / stats.windowsTraded) * 100).toFixed(0)
     : '0';
+  const tradeRate = stats.windowsProcessed > 0
+    ? ((stats.windowsTraded / stats.windowsProcessed) * 100).toFixed(0)
+    : '0';
   const pnlSign = stats.totalPnl >= 0 ? '+' : '';
+  const avgPnl = stats.windowsTraded > 0
+    ? (stats.totalPnl / stats.windowsTraded).toFixed(2)
+    : '0.00';
+
   send(
     'DAILY_SUMMARY',
-    'Daily Summary',
-    `Traded ${stats.windowsTraded} of ${stats.windowsProcessed} windows\n` +
+    `[${strategy.toUpperCase()}] Daily Summary`,
+    `Strategy: **${strategy.toUpperCase()}**\n` +
+    `Traded ${stats.windowsTraded} of ${stats.windowsProcessed} windows (${tradeRate}% trade rate)\n` +
     `Record: **${stats.wins}W / ${stats.losses}L** (${winRate}% win rate)\n` +
-    `P&L: **${pnlSign}$${stats.totalPnl.toFixed(2)}** | Balance: $${stats.balance.toFixed(2)}`,
+    `P&L: **${pnlSign}$${stats.totalPnl.toFixed(2)}** | Avg: $${avgPnl}/trade\n` +
+    `Balance: **$${stats.balance.toFixed(2)}**\n` +
+    `Log: logs/btc-cycles-${strategy}.jsonl`,
   );
 }

@@ -1,22 +1,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../clock/logger';
+import { btcConfig } from '../config';
 import { WindowCycleLog, TradeResult, StrategyDecision } from '../types';
 
 const STATE_DIR = path.join(process.cwd(), 'state');
 const STATE_PATH = path.join(STATE_DIR, 'btc-trading-state.json');
 const HEALTH_PATH = path.join(STATE_DIR, 'btc-system-health.json');
-const CYCLE_LOG_PATH = path.join(process.cwd(), 'logs', 'btc-cycles.jsonl');
 
-export interface OpenTrade {
-  slug: string;
-  epochStart: number;
-  epochEnd: number;
-  direction: 'up' | 'down';
-  entryPrice: number;
-  size: number;
-  strategy: string;
-  orderId: string;
+function getCycleLogPath(): string {
+  const version = btcConfig.trading.strategy;
+  return path.join(process.cwd(), 'logs', `btc-cycles-${version}.jsonl`);
 }
 
 export interface BtcTradingState {
@@ -30,7 +24,6 @@ export interface BtcTradingState {
     strategy?: string;
     orderId?: string;
   };
-  openTrades: OpenTrade[];
   todayStats: {
     windowsProcessed: number;
     windowsTraded: number;
@@ -56,7 +49,6 @@ export interface BtcTradingState {
 
 function defaultState(): BtcTradingState {
   return {
-    openTrades: [],
     todayStats: {
       windowsProcessed: 0,
       windowsTraded: 0,
@@ -119,9 +111,10 @@ export function writeHealth(data: Record<string, any>): void {
 
 export function appendCycleLog(log: WindowCycleLog): void {
   try {
-    const dir = path.dirname(CYCLE_LOG_PATH);
+    const logPath = getCycleLogPath();
+    const dir = path.dirname(logPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(CYCLE_LOG_PATH, JSON.stringify(log) + '\n');
+    fs.appendFileSync(logPath, JSON.stringify(log) + '\n');
   } catch (err: any) {
     logger.error(`Failed to append cycle log: ${err.message}`);
   }
