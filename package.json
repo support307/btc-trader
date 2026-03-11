@@ -1,31 +1,20 @@
 {
-  "name": "discord-trader",
+  "name": "btc-trader",
   "version": "1.0.0",
-  "description": "Guru-follow trading bot: monitors Discord signals, executes 0DTE options on Alpaca",
+  "description": "Autonomous BTC 5-minute prediction market trader on Polymarket",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "daemon:start": "pm2 start ecosystem.config.js",
-    "daemon:clean-start": "bash scripts/clean-start.sh",
-    "daemon:stop": "pm2 stop discord-trader",
-    "daemon:restart": "pm2 restart discord-trader",
-    "daemon:logs": "pm2 logs discord-trader --lines 100",
-    "daemon:status": "pm2 status",
-    "test:simulate": "tsx src/test/simulate-day.ts",
-    "test:preflight": "tsx src/test/preflight.ts",
     "btc:start": "tsx src/btc-trader/index.ts",
+    "btc:status": "tsx src/btc-trader/index.ts --status",
     "btc:backtest": "tsx src/btc-trader/backtest/run-backtest.ts",
-    "btc:backtest:7d": "tsx src/btc-trader/backtest/run-backtest.ts 7",
     "btc:backtest:1d": "tsx src/btc-trader/backtest/run-backtest.ts 1",
-    "btc:status": "tsx src/btc-trader/index.ts --status"
+    "btc:backtest:7d": "tsx src/btc-trader/backtest/run-backtest.ts 7"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "dotenv": "^16.3.1",
     "openai": "^6.27.0",
-    "pm2": "^6.0.14",
     "winston": "^3.11.0",
     "ws": "^8.19.0"
   },
