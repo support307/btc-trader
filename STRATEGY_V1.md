@@ -62,7 +62,7 @@ The 260s checkpoint was added in V1. Previous version stopped at 220s (80s remai
 
 | Parameter | Value |
 |-----------|-------|
-| Threshold | 5 basis points (0.0005) |
+| Threshold | 3 basis points (0.0003) |
 | Measurement | `priceFeed.getVolatility(300_000, 10_000)` -- 5-min window, 10s samples |
 | Behavior | If vol < threshold, skip the entire window (no strategy evaluation, no orderbook fetch) |
 
@@ -114,7 +114,7 @@ Previous version had a bug where overlapping windows caused PnL to be attributed
 | Momentum-orderbook weight | 0.20 | 0.15 |
 | Sentiment-gated weight | 0.10 | 0.05 |
 | Eval checkpoints | [75, 150, 220] | [75, 150, **220, 260**] |
-| Volatility gate | None | **5bps minimum** |
+| Volatility gate | None | **3bps minimum** |
 | Sizing | Fixed $2 | **25% of balance, Kelly-scaled** |
 | Close-snipe signal | Rolling btcReturn5m | **True windowReturn** |
 | Trade attribution | Single currentWindow | **Per-window openTrades array** |

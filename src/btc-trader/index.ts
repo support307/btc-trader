@@ -244,6 +244,14 @@ async function tick() {
   const evalLabel = nextCheckpointIdx > 0 ? ` (re-eval #${nextCheckpointIdx})` : '';
   logger.info(`Processing window epoch ${currentEpoch}, ${secondsInto}s into window${evalLabel}`);
 
+  // Volatility gate: skip windows where BTC is not moving enough to exploit
+  const MIN_VOL_THRESHOLD = 0.0003; // 3 bps
+  const recentVol = priceFeed.getVolatility(300_000, 10_000);
+  if (recentVol < MIN_VOL_THRESHOLD && recentVol > 0) {
+    logger.info(`Skipping: volatility too low (${(recentVol * 10000).toFixed(1)}bps < ${(MIN_VOL_THRESHOLD * 10000).toFixed(0)}bps threshold)`);
+    return;
+  }
+
   const state = readState();
   if (nextCheckpointIdx === 0) state.todayStats.windowsProcessed++;
 
