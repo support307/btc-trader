@@ -19,7 +19,7 @@ export class EnsembleStrategy implements Strategy {
 
   private strategies: Strategy[];
   private weights: Record<string, number>;
-  private minEnsembleConfidence = 0.55;
+  private minEnsembleConfidence = 0.50;
   private kellyFraction = 0.25;
 
   constructor() {
@@ -108,7 +108,7 @@ export class EnsembleStrategy implements Strategy {
       return abstain(this.name, `Negative EV: ensemble ${confidence.toFixed(3)} vs market ${marketPrice.toFixed(3)}`);
     }
 
-    if (marketPrice > 0.70) {
+    if (marketPrice > 0.75) {
       return abstain(this.name, `Market price too high (${marketPrice.toFixed(3)}), payout too small for risk`);
     }
 
