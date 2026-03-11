@@ -1,15 +1,13 @@
-# Daily Startup Messages for OpenClaw
-
-The BTC trader runs 24/7. Use these messages to start it, check on it, or stop it.
+# OpenClaw Prompts for BTC Trader
 
 ---
 
-## First-Time Setup (Fresh Clone)
+## Clean Start
 
-Use this prompt when setting up the project on a new machine for the first time.
+One prompt to rule them all. Paste this into OpenClaw to pull latest code, install deps, kill zombies, verify everything, and start the bot fresh. Safe to run on a brand new machine or for the 100th restart.
 
 ```
-Set up the BTC 5-minute trading bot from a fresh clone.
+Clean start the BTC 5-minute trading bot.
 
 Please follow these steps in order:
 
@@ -17,113 +15,75 @@ Please follow these steps in order:
    - ~/projects/btc-trader/openclaw/MEMORY.md
    - ~/projects/btc-trader/openclaw/AGENTS.md
 
-2. Install Node.js dependencies:
+2. Pull latest code:
+   cd ~/projects/btc-trader && git pull
+
+3. Install/update dependencies:
    cd ~/projects/btc-trader && npm install
-   Verify tsx is available: npx tsx --version
+   Verify tsx works: npx tsx --version
 
-3. Install the Polymarket CLI globally:
+4. Check if Polymarket CLI is installed:
+   which polymarket
+   If NOT found, install it:
    npm install -g @polymarket/cli
-   Verify it's in PATH: which polymarket
+   Then verify: which polymarket
 
-4. Create required directories:
+5. Create required directories (safe to re-run):
    mkdir -p ~/projects/btc-trader/logs
    mkdir -p ~/projects/btc-trader/state
 
-5. Verify .env exists and has the required keys:
-   cat ~/projects/btc-trader/.env
-   It MUST contain:
+6. Verify .env exists and has required keys:
+   ls -la ~/projects/btc-trader/.env
+   If missing: cp ~/projects/btc-trader/.env.example ~/projects/btc-trader/.env
+   Then check it contains:
    - POLYMARKET_PRIVATE_KEY (starts with 0x)
-   - DISCORD_WEBHOOK_URL (for trade notifications)
-   - GROK_API_KEY (for sentiment analysis)
+   - DISCORD_WEBHOOK_URL
+   - GROK_API_KEY
    - BTC_DRY_RUN=false
    - BTC_EXECUTION_ADAPTER=polymarket
-   If .env is missing, copy from .env.example and fill in the real keys:
-   cp ~/projects/btc-trader/.env.example ~/projects/btc-trader/.env
+   If any key is missing or placeholder, STOP and tell me which keys need to be filled in.
 
-6. Verify the Polymarket wallet is configured:
+7. Verify Polymarket wallet:
    polymarket wallet show
-   Should show the wallet address. If not configured, run:
-   polymarket wallet create
-   and import the private key from .env.
+   Should show wallet address. If not configured, STOP and tell me to set up the wallet.
 
-7. Verify VPN is connected to Brazil:
+8. Verify VPN is connected to Brazil:
    curl -s https://polymarket.com/api/geoblock | cat
-   This MUST return {"blocked":false}. If blocked is true, STOP and tell me
-   to connect NordVPN to Brazil.
+   Must return {"blocked":false}. If blocked is true, STOP and tell me to connect NordVPN to Brazil.
 
-8. Test-run the bot (check it starts without errors):
-   cd ~/projects/btc-trader && npm run btc:start
-   Watch the first 30 seconds of output. You should see:
-   - "BTC 5-Minute Trading Daemon starting..."
-   - "Binance BTC/USDT WebSocket connected"
-   - "BTC price: $XXXXX.XX"
-   - Adapter: polymarket (NOT dry-run)
-   If it says dry-run, the Polymarket CLI is not installed or wallet is not configured.
+9. Kill ALL existing btc-trader processes (full zombie cleanup):
+   kill $(cat ~/projects/btc-trader/state/btc-trader.pid 2>/dev/null) 2>/dev/null
+   pkill -f "btc-trader/index.ts" 2>/dev/null
+   sleep 2
+   Confirm nothing is running: ps aux | grep "btc-trader" | grep -v grep
 
-9. If the test looks good, kill it and start in background:
-   pkill -f "btc-trader/index.ts" 2>/dev/null; sleep 2
-   cd ~/projects/btc-trader && nohup npm run btc:start > logs/btc-trader.log 2>&1 &
+10. Start the bot in background:
+    cd ~/projects/btc-trader && nohup npm run btc:start > logs/btc-trader.log 2>&1 &
 
-10. Wait 30 seconds, verify:
+11. Wait 30 seconds, then verify startup:
     tail -30 ~/projects/btc-trader/logs/btc-trader.log
+    Confirm you see:
+    - "BTC 5-Minute Trading Daemon starting..."
+    - "Binance BTC/USDT WebSocket connected"
+    - "BTC price: $XXXXX.XX"
+    - Adapter: polymarket (NOT dry-run)
+    If it says dry-run, go back and fix Polymarket CLI / wallet.
+
+12. Check state and balance:
     cat ~/projects/btc-trader/state/btc-trading-state.json
 
 Report back with:
-- Node.js version and npm install status
-- Polymarket CLI version and wallet address
-- VPN status (blocked or not)
-- Balance (available USDC.e)
-- Daemon status (running or failed)
-- Adapter (polymarket or dry-run)
-- Any issues encountered
-```
-
----
-
-## Startup Message
-
-Copy-paste this to get the bot running (or to restart after a crash/reboot):
-
-```
-Start the BTC 5-minute trading bot on Polymarket.
-
-Please follow these steps in order:
-
-1. Read your operating docs:
-   - ~/projects/btc-trader/openclaw/MEMORY.md
-   - ~/projects/btc-trader/openclaw/AGENTS.md
-
-2. Verify VPN is connected to Brazil:
-   curl -s https://polymarket.com/api/geoblock | cat
-   This MUST return {"blocked":false}. If blocked is true, STOP and tell me
-   to connect NordVPN to Brazil.
-
-3. Kill any existing btc-trader processes:
-   pkill -f "btc-trader/index.ts" 2>/dev/null; sleep 2
-
-4. Start the BTC trader:
-   cd ~/projects/btc-trader && nohup npm run btc:start > logs/btc-trader.log 2>&1 &
-
-5. Wait 30 seconds, then verify it started:
-   tail -30 ~/projects/btc-trader/logs/btc-trader.log
-
-6. Confirm you see:
-   - "BTC 5-Minute Trading Daemon starting..."
-   - "Binance BTC/USDT WebSocket connected"
-   - "BTC price: $XXXXX.XX"
-   - A startup notification mentioning balance and adapter
-
-7. Check state:
-   cat ~/projects/btc-trader/state/btc-trading-state.json
-
-Report back with:
+- Git pull result (already up to date, or files changed)
+- npm install result (up to date, or packages added)
+- Polymarket CLI status (installed, version)
 - VPN status (blocked or not, country)
+- Adapter (polymarket or dry-run)
 - Balance (available USDC.e)
-- Daemon status (running or failed to start)
-- First trade decision (if a window has been processed)
+- Daemon status (running, PID)
 - Any redeemable positions (remind me to claim at polymarket.com/portfolio)
+- Any issues encountered
 
-The bot will now trade autonomously every 5 minutes. Monitor it per AGENTS.md.
+The bot will now trade autonomously every 5 minutes. Monitor per AGENTS.md.
 ```
 
 ---
