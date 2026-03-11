@@ -54,6 +54,7 @@ export interface FeatureVector {
   btcReturn1m: number;
   btcReturn5m: number;
   btcReturn15m: number;
+  windowReturn: number;
   btcVolatility1m: number;
   btcVolatility5m: number;
   btcMomentum: number;

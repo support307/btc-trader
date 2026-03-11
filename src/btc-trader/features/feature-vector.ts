@@ -29,6 +29,9 @@ export function buildFeatureVector(ctx: FeatureBuildContext): FeatureVector {
   const btcReturn1m = candleReturn1m !== 0 ? candleReturn1m : (ctx.priceFeedReturn1m ?? 0);
   const btcReturn5m = candleReturn5m !== 0 ? candleReturn5m : (ctx.priceFeedReturn5m ?? 0);
 
+  const windowReturn = priceChangeFromWindowStart(ctx.btcCandles, windowStartMs)
+    || btcReturn5m;
+
   const last5 = closePrices.slice(-5);
   const last60 = closePrices.slice(-60);
   const btcVolatility1m = computeVolatility(last5);
@@ -67,6 +70,7 @@ export function buildFeatureVector(ctx: FeatureBuildContext): FeatureVector {
     btcReturn1m,
     btcReturn5m,
     btcReturn15m,
+    windowReturn,
     btcVolatility1m,
     btcVolatility5m,
     btcMomentum,

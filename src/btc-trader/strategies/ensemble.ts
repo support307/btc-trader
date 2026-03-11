@@ -32,12 +32,12 @@ export class EnsembleStrategy implements Strategy {
       new SentimentGatedStrategy(),
     ];
     this.weights = {
-      'early-momentum': 0.30,
-      'close-snipe': 0.40,
-      'momentum-orderbook': 0.20,
+      'early-momentum': 0.20,
+      'close-snipe': 0.60,
+      'momentum-orderbook': 0.15,
       'value-fade': 0.00,
       'arbitrage': 0.00,
-      'sentiment-gated': 0.10,
+      'sentiment-gated': 0.05,
     };
   }
 
@@ -50,11 +50,13 @@ export class EnsembleStrategy implements Strategy {
     // Arbitrage disabled: execution layer only supports single-side orders.
     // When dual-side execution is added, re-enable this shortcut.
 
-    // Filter to non-abstaining strategies
-    const active = subDecisions.filter((d) => d.direction !== 'abstain');
+    // Filter to non-abstaining strategies with non-zero weight
+    const active = subDecisions.filter(
+      (d) => d.direction !== 'abstain' && (this.weights[d.strategy] || 0) > 0
+    );
 
     if (active.length === 0) {
-      return abstain(this.name, 'All sub-strategies abstained');
+      return abstain(this.name, 'All sub-strategies abstained (or zero-weight)');
     }
 
     // Sentiment cannot trade solo -- require at least one data-driven strategy

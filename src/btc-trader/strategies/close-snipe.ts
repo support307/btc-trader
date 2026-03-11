@@ -29,9 +29,9 @@ export class CloseSnipeStrategy implements Strategy {
       return abstain(this.name, `Too late: ${secondsRemaining}s remaining, execution risk`);
     }
 
-    const inWindowReturn = features.btcReturn5m !== 0
-      ? features.btcReturn5m
-      : features.btcReturn1m;
+    const inWindowReturn = features.windowReturn !== 0
+      ? features.windowReturn
+      : (features.btcReturn5m !== 0 ? features.btcReturn5m : features.btcReturn1m);
     const absMove = Math.abs(inWindowReturn);
 
     if (absMove < this.minPriceMove) {

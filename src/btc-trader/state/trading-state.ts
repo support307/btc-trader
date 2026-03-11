@@ -8,6 +8,17 @@ const STATE_PATH = path.join(STATE_DIR, 'btc-trading-state.json');
 const HEALTH_PATH = path.join(STATE_DIR, 'btc-system-health.json');
 const CYCLE_LOG_PATH = path.join(process.cwd(), 'logs', 'btc-cycles.jsonl');
 
+export interface OpenTrade {
+  slug: string;
+  epochStart: number;
+  epochEnd: number;
+  direction: 'up' | 'down';
+  entryPrice: number;
+  size: number;
+  strategy: string;
+  orderId: string;
+}
+
 export interface BtcTradingState {
   currentWindow?: {
     slug: string;
@@ -19,6 +30,7 @@ export interface BtcTradingState {
     strategy?: string;
     orderId?: string;
   };
+  openTrades: OpenTrade[];
   todayStats: {
     windowsProcessed: number;
     windowsTraded: number;
@@ -44,6 +56,7 @@ export interface BtcTradingState {
 
 function defaultState(): BtcTradingState {
   return {
+    openTrades: [],
     todayStats: {
       windowsProcessed: 0,
       windowsTraded: 0,

@@ -28,7 +28,7 @@ import { PolymarketExecAdapter } from './execution/polymarket-exec';
 import { AlpacaCryptoExecAdapter } from './execution/alpaca-crypto-exec';
 import {
   readState, writeState, writeHealth, appendCycleLog,
-  updateStatsAfterTrade, resetDailyStats, BtcTradingState,
+  updateStatsAfterTrade, resetDailyStats, BtcTradingState, OpenTrade,
 } from './state/trading-state';
 import { btcNotify, notifyDecision, notifyFill, notifySkip, notifyResolution, notifyDailySummary } from './notifications/notifier';
 import { MarketWindow, StrategyDecision, TradeOrder, WindowCycleLog, SentimentScore } from './types';
@@ -38,7 +38,7 @@ let priceFeed: BinancePriceFeed;
 let strategy: Strategy;
 let executor: ExecutionAdapter;
 let lastTradeEpoch = 0;
-const evalCheckpoints = [75, 150, 220];
+const evalCheckpoints = [75, 150, 220, 260];
 let lastEvalCheckpoint: Record<number, number> = {}; // epoch -> last checkpoint index evaluated
 let lastSentiment: SentimentScore | null = null;
 let lastSentimentFetch = 0;
@@ -237,6 +237,14 @@ async function tick() {
   const evalLabel = nextCheckpointIdx > 0 ? ` (re-eval #${nextCheckpointIdx})` : '';
   logger.info(`Processing window epoch ${currentEpoch}, ${secondsInto}s into window${evalLabel}`);
 
+  // Volatility gate: skip windows where BTC isn't moving enough to exploit
+  const MIN_VOL_THRESHOLD = 0.0005; // 5 bps
+  const recentVol = priceFeed.getVolatility(300_000, 10_000);
+  if (recentVol < MIN_VOL_THRESHOLD && recentVol > 0) {
+    logger.info(`Skipping: volatility too low (${(recentVol * 10000).toFixed(1)}bps < ${(MIN_VOL_THRESHOLD * 10000).toFixed(0)}bps threshold)`);
+    return;
+  }
+
   const state = readState();
   if (nextCheckpointIdx === 0) state.todayStats.windowsProcessed++;
 
@@ -291,7 +299,8 @@ async function tick() {
 
   logger.info(
     `Features: btcPrice=$${features.btcPrice.toFixed(2)}, ret1m=${(features.btcReturn1m * 100).toFixed(4)}%, ` +
-    `ret5m=${(features.btcReturn5m * 100).toFixed(4)}%, vol5m=${(features.btcVolatility5m * 10000).toFixed(1)}bps, ` +
+    `ret5m=${(features.btcReturn5m * 100).toFixed(4)}%, winRet=${(features.windowReturn * 100).toFixed(4)}%, ` +
+    `vol5m=${(features.btcVolatility5m * 10000).toFixed(1)}bps, ` +
     `mom=${features.btcMomentum.toFixed(3)}, probUp=${features.impliedProbUp.toFixed(3)}, ` +
     `probDown=${features.impliedProbDown.toFixed(3)}, candles=${candles.length}, ` +
     `sentiment=${features.sentimentScore.toFixed(2)}, secInWindow=${features.secondsIntoWindow}`
@@ -328,6 +337,14 @@ async function tick() {
     const marketPrice = isUp ? features.impliedProbUp : features.impliedProbDown;
 
     const bal = await executor.getBalance();
+
+    // Dynamic sizing: use % of balance, scaled by Kelly fraction, with floor and cap
+    const POLYMARKET_MIN_COST = 2.50; // 5 tokens * ~$0.50 avg price
+    const pctBudget = bal.available * (btcConfig.trading.budgetPercent / 100);
+    const kellyScale = decision.suggestedSize != null ? Math.min(decision.suggestedSize / 0.25, 1.0) : 1.0;
+    const rawBudget = pctBudget * kellyScale;
+    const tradeBudget = Math.max(POLYMARKET_MIN_COST, Math.min(rawBudget, btcConfig.trading.budgetMaxDollars));
+
     const estCost = Math.max(5, Math.ceil(1.05 / marketPrice)) * marketPrice;
     if (bal.available < estCost) {
       logger.warn(`Insufficient balance: $${bal.available.toFixed(2)} < $${estCost.toFixed(2)} needed. Claim positions on polymarket.com`);
@@ -336,8 +353,10 @@ async function tick() {
       return;
     }
 
+    logger.info(`Sizing: ${btcConfig.trading.budgetPercent}% of $${bal.available.toFixed(2)} = $${pctBudget.toFixed(2)}, kelly=${kellyScale.toFixed(2)}, budget=$${tradeBudget.toFixed(2)}`);
+
     const orderPrice = Math.min(0.99, marketPrice + 0.005);
-    const orderSize = btcConfig.trading.budgetPerTrade / marketPrice;
+    const orderSize = tradeBudget / marketPrice;
 
     const order: TradeOrder = {
       id: createOrderId(decision.strategy, window.slug),
@@ -368,6 +387,17 @@ async function tick() {
         strategy: decision.strategy,
         orderId: order.id,
       };
+      if (!state.openTrades) state.openTrades = [];
+      state.openTrades.push({
+        slug: window.slug,
+        epochStart: window.epochStart,
+        epochEnd: window.epochEnd,
+        direction: decision.direction as 'up' | 'down',
+        entryPrice: tradeResult.fillPrice,
+        size: tradeResult.fillSize,
+        strategy: decision.strategy,
+        orderId: order.id,
+      });
     }
   } else if (nextCheckpointIdx === 0) {
     notifySkip(features, decision.reasoning || 'No strategy triggered');
@@ -405,29 +435,43 @@ async function tick() {
   }
 }
 
-async function resolveWindow(window: MarketWindow, state: BtcTradingState) {
+async function resolveWindow(window: MarketWindow, _legacyState: BtcTradingState) {
   try {
     const resolved = await marketClock.fetchWindowByEpoch(window.epochStart);
     if (!resolved || !resolved.resolved || !resolved.outcome) {
       logger.warn(`Window ${window.slug} not yet resolved, will check again`);
-      setTimeout(() => resolveWindow(window, state), 15_000);
+      setTimeout(() => resolveWindow(window, _legacyState), 15_000);
       return;
     }
 
     logger.info(`Window ${window.slug} resolved: ${resolved.outcome}`);
 
     const currentState = readState();
-    const cw = currentState.currentWindow;
-    const direction = (cw?.direction as 'up' | 'down') || 'up';
-    const entryPrice = cw?.entryPrice || 0;
-    const size = cw?.size || 0;
+    if (!currentState.openTrades) currentState.openTrades = [];
+
+    const tradeIdx = currentState.openTrades.findIndex(
+      (t) => t.epochStart === window.epochStart
+    );
+    const trade: OpenTrade | undefined = tradeIdx >= 0
+      ? currentState.openTrades[tradeIdx]
+      : undefined;
+
+    const direction = trade?.direction || (currentState.currentWindow?.direction as 'up' | 'down') || 'up';
+    const entryPrice = trade?.entryPrice || currentState.currentWindow?.entryPrice || 0;
+    const size = trade?.size || currentState.currentWindow?.size || 0;
+
+    if (tradeIdx >= 0) {
+      currentState.openTrades.splice(tradeIdx, 1);
+    }
+    if (currentState.currentWindow?.epochStart === window.epochStart) {
+      currentState.currentWindow = undefined;
+    }
 
     if (executor instanceof DryRunAdapter) {
       const pnl = (executor as DryRunAdapter).resolveWindow(resolved.outcome);
       currentState.todayStats.totalPnl += pnl;
       if (pnl > 0) currentState.todayStats.wins++;
       else currentState.todayStats.losses++;
-      currentState.currentWindow = undefined;
       writeState(currentState);
 
       notifyResolution({
@@ -449,7 +493,6 @@ async function resolveWindow(window: MarketWindow, state: BtcTradingState) {
       currentState.todayStats.totalPnl += pnl;
       if (pnl > 0) currentState.todayStats.wins++;
       else currentState.todayStats.losses++;
-      currentState.currentWindow = undefined;
       writeState(currentState);
 
       const bal = await executor.getBalance();
