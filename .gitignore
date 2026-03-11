@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.local
+.alpaca-live-keys
+.alpaca-paper-keys
+*.log
+logs/
+!logs/.gitkeep
+state/trading-state.json
+state/system-health.json
+state/btc-trading-state.json
+state/btc-system-health.json
+streamer/index.js.paper-backup
+memory/
+backtest-results/
