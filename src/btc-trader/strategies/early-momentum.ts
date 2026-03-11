@@ -16,7 +16,7 @@ export class EarlyMomentumStrategy implements Strategy {
   private minSecondsIntoWindow = 45;
   private maxSecondsIntoWindow = 180;
   private minAbsReturn = 0.00005; // 0.005% min move (~$3.5 at $70k)
-  private minConfidence = 0.56;
+  private minConfidence = 0.62;
 
   decide(features: FeatureVector, _window: MarketWindow): StrategyDecision {
     if (features.secondsIntoWindow < this.minSecondsIntoWindow) {

@@ -17,7 +17,7 @@ export class CloseSnipeStrategy implements Strategy {
   private minSecondsRemaining = 20;
   private maxSecondsRemaining = 180;
   private minPriceMove = 0.00008;      // 0.008% BTC move (~$5.6 at $70k)
-  private minConfidence = 0.58;
+  private minConfidence = 0.64;
 
   decide(features: FeatureVector, window: MarketWindow): StrategyDecision {
     const secondsRemaining = 300 - features.secondsIntoWindow;

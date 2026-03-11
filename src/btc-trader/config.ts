@@ -51,7 +51,7 @@ export const btcConfig = {
   get trading() {
     return {
       windowSeconds: 300,
-      budgetPerTrade: Number(env('BTC_BUDGET_PER_TRADE', '50')),
+      budgetPerTrade: Number(env('BTC_BUDGET_PER_TRADE', '2')),
       minConfidence: Number(env('BTC_MIN_CONFIDENCE', '0.60')),
       maxPositionsPerHour: Number(env('BTC_MAX_POSITIONS_PER_HOUR', '12')),
       dryRun: env('BTC_DRY_RUN', 'true') === 'true',

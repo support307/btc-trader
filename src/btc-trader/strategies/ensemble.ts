@@ -19,7 +19,7 @@ export class EnsembleStrategy implements Strategy {
 
   private strategies: Strategy[];
   private weights: Record<string, number>;
-  private minEnsembleConfidence = 0.33;
+  private minEnsembleConfidence = 0.55;
   private kellyFraction = 0.25;
 
   constructor() {
@@ -33,10 +33,10 @@ export class EnsembleStrategy implements Strategy {
     ];
     this.weights = {
       'early-momentum': 0.30,
-      'close-snipe': 0.25,
+      'close-snipe': 0.40,
       'momentum-orderbook': 0.20,
-      'value-fade': 0.15,
-      'arbitrage': 0.00, // disabled: execution layer only buys one side
+      'value-fade': 0.00,
+      'arbitrage': 0.00,
       'sentiment-gated': 0.10,
     };
   }
@@ -106,6 +106,10 @@ export class EnsembleStrategy implements Strategy {
 
     if (!isPositiveEV(marketPrice, confidence, direction)) {
       return abstain(this.name, `Negative EV: ensemble ${confidence.toFixed(3)} vs market ${marketPrice.toFixed(3)}`);
+    }
+
+    if (marketPrice > 0.70) {
+      return abstain(this.name, `Market price too high (${marketPrice.toFixed(3)}), payout too small for risk`);
     }
 
     // Kelly criterion for position sizing (capped)

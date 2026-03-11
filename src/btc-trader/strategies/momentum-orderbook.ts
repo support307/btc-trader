@@ -19,7 +19,7 @@ export class MomentumOrderbookStrategy implements Strategy {
 
   private minSecondsIntoWindow = 45;
   private maxSecondsIntoWindow = 200;
-  private minConfidence = 0.52;
+  private minConfidence = 0.58;
 
   private weights = {
     return1m: 0.30,

@@ -30,7 +30,7 @@ import {
   readState, writeState, writeHealth, appendCycleLog,
   updateStatsAfterTrade, resetDailyStats, BtcTradingState,
 } from './state/trading-state';
-import { btcNotify, notifyDecision, notifyTradeResult, notifyDailySummary } from './notifications/notifier';
+import { btcNotify, notifyDecision, notifyFill, notifySkip, notifyResolution, notifyDailySummary } from './notifications/notifier';
 import { MarketWindow, StrategyDecision, TradeOrder, WindowCycleLog, SentimentScore } from './types';
 
 let running = false;
@@ -298,11 +298,13 @@ async function tick() {
   );
 
   // Run each sub-strategy individually for logging
+  let subDecisions: StrategyDecision[] = [];
   if (strategy.name === 'ensemble') {
     const ensemble = strategy as any;
     if (ensemble.getSubStrategies) {
       for (const sub of ensemble.getSubStrategies()) {
         const subDec = sub.decide(features, window);
+        subDecisions.push(subDec);
         logger.info(
           `  [${sub.name}] ${subDec.direction} conf=${subDec.confidence.toFixed(3)} -- ${subDec.reasoning}`
         );
@@ -334,20 +336,24 @@ async function tick() {
       return;
     }
 
+    const orderPrice = Math.min(0.99, marketPrice + 0.005);
+    const orderSize = btcConfig.trading.budgetPerTrade / marketPrice;
+
     const order: TradeOrder = {
       id: createOrderId(decision.strategy, window.slug),
       windowSlug: window.slug,
       direction: decision.direction,
       tokenId,
       side: 'buy',
-      price: Math.min(0.99, marketPrice + 0.005),
-      size: btcConfig.trading.budgetPerTrade / marketPrice,
+      price: orderPrice,
+      size: orderSize,
       timestamp: Date.now(),
       strategy: decision.strategy,
     };
 
-    notifyDecision(decision, window.slug);
+    notifyDecision(decision, features, orderPrice, orderSize, subDecisions.length > 0 ? subDecisions : undefined);
     tradeResult = await executor.placeOrder(order);
+    notifyFill(tradeResult);
 
     lastTradeEpoch = currentEpoch;
 
@@ -363,6 +369,8 @@ async function tick() {
         orderId: order.id,
       };
     }
+  } else if (nextCheckpointIdx === 0) {
+    notifySkip(features, decision.reasoning || 'No strategy triggered');
   }
 
   // Log cycle
@@ -408,19 +416,55 @@ async function resolveWindow(window: MarketWindow, state: BtcTradingState) {
 
     logger.info(`Window ${window.slug} resolved: ${resolved.outcome}`);
 
+    const currentState = readState();
+    const cw = currentState.currentWindow;
+    const direction = (cw?.direction as 'up' | 'down') || 'up';
+    const entryPrice = cw?.entryPrice || 0;
+    const size = cw?.size || 0;
+
     if (executor instanceof DryRunAdapter) {
       const pnl = (executor as DryRunAdapter).resolveWindow(resolved.outcome);
-      const currentState = readState();
       currentState.todayStats.totalPnl += pnl;
       if (pnl > 0) currentState.todayStats.wins++;
       else currentState.todayStats.losses++;
       currentState.currentWindow = undefined;
       writeState(currentState);
-    }
 
-    btcNotify('WINDOW_RESOLVED',
-      `${window.slug} resolved: **${resolved.outcome.toUpperCase()}**`
-    );
+      notifyResolution({
+        direction,
+        entryPrice,
+        size,
+        outcome: resolved.outcome,
+        pnl,
+        balance: (executor as DryRunAdapter).getStats().balance,
+        todayWins: currentState.todayStats.wins,
+        todayLosses: currentState.todayStats.losses,
+        todayPnl: currentState.todayStats.totalPnl,
+      });
+    } else {
+      const won = direction === resolved.outcome;
+      const payout = won ? size * 1.0 : 0;
+      const cost = entryPrice * size;
+      const pnl = payout - cost;
+      currentState.todayStats.totalPnl += pnl;
+      if (pnl > 0) currentState.todayStats.wins++;
+      else currentState.todayStats.losses++;
+      currentState.currentWindow = undefined;
+      writeState(currentState);
+
+      const bal = await executor.getBalance();
+      notifyResolution({
+        direction,
+        entryPrice,
+        size,
+        outcome: resolved.outcome,
+        pnl,
+        balance: bal.available,
+        todayWins: currentState.todayStats.wins,
+        todayLosses: currentState.todayStats.losses,
+        todayPnl: currentState.todayStats.totalPnl,
+      });
+    }
   } catch (err: any) {
     logger.error(`Resolution check failed: ${err.message}`);
   }
