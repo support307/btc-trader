@@ -17,9 +17,9 @@ import { isPositiveEV } from '../features/fees';
 export class EnsembleV2Strategy implements Strategy {
   readonly name = 'ensemble-v2';
 
-  private maxMarketPrice = 0.45;
+  private maxMarketPrice = 0.50;
   private minEnsembleConfidence = 0.65;
-  private minBtcMove = 0.0003;       // 0.03% minimum
+  private minBtcMove = 0.0001;       // 0.01% minimum
   private minCandlesRequired = 2;
   private kellyFraction = 0.25;
 
@@ -44,9 +44,15 @@ export class EnsembleV2Strategy implements Strategy {
     const upCount = upVotes.length;
     const downCount = downVotes.length;
 
+    // Allow close-snipe to trade solo with high confidence (it's the primary edge).
+    // All other signals still need 2+ agreement.
     if (upCount < 2 && downCount < 2) {
       const sole = signals[0];
-      return abstain(this.name, `Only 1 signal: ${sole.name} ${sole.direction} (${sole.confidence.toFixed(3)}). Need 2+ agreeing.`);
+      if (sole.name === 'close-snipe' && sole.confidence >= 0.70) {
+        // close-snipe solo trade -- skip the agreement requirement
+      } else {
+        return abstain(this.name, `Only 1 signal: ${sole.name} ${sole.direction} (${sole.confidence.toFixed(3)}). Need 2+ agreeing (or close-snipe > 70%).`);
+      }
     }
 
     const direction: Direction = upCount >= downCount ? 'up' : 'down';
@@ -149,7 +155,7 @@ export class EnsembleV2Strategy implements Strategy {
     const ret1m = f.btcReturn1m;
     const ret5m = f.btcReturn5m;
 
-    if (Math.abs(ret1m) < this.minBtcMove) return [];
+    if (Math.abs(ret1m) < 0.0001) return [];
 
     const direction: Direction = ret1m > 0 ? 'up' : 'down';
 
@@ -200,7 +206,7 @@ export class EnsembleV2Strategy implements Strategy {
    */
   private divergenceSignal(f: FeatureVector): Signal[] {
     const ret = f.btcReturn1m !== 0 ? f.btcReturn1m : f.btcReturn5m;
-    if (Math.abs(ret) < this.minBtcMove) return [];
+    if (Math.abs(ret) < 0.0001) return [];
 
     const btcDirection: Direction = ret > 0 ? 'up' : 'down';
     const marketPrice = btcDirection === 'up' ? f.impliedProbUp : f.impliedProbDown;

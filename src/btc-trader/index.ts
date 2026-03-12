@@ -22,6 +22,12 @@ import { checkGeoblock } from './data/gamma-client';
 import { buildFeatureVector, FeatureBuildContext } from './features/feature-vector';
 import { EnsembleStrategy } from './strategies/ensemble';
 import { EnsembleV2Strategy } from './strategies/ensemble-v2';
+import { EnsembleV3Strategy } from './strategies/ensemble-v3';
+import { EnsembleV5Strategy } from './strategies/ensemble-v5';
+import { EnsembleV4Strategy } from './strategies/ensemble-v4';
+import { predictDirection, inverseCramerPredict } from './data/news-feed';
+import { BinanceOrderBookFeed } from './data/binance-orderbook-ws';
+import { computeMicrostructureFeatures } from './features/microstructure-features';
 import { Strategy } from './strategies/strategy-interface';
 import { ExecutionAdapter, createOrderId } from './execution/execution-adapter';
 import { DryRunAdapter } from './execution/dry-run';
@@ -36,12 +42,15 @@ import { MarketWindow, StrategyDecision, TradeOrder, WindowCycleLog, SentimentSc
 
 let running = false;
 let priceFeed: BinancePriceFeed;
+let orderBookFeed: BinanceOrderBookFeed | null = null;
 let strategy: Strategy;
 let executor: ExecutionAdapter;
 let lastTradeEpoch = 0;
-const evalCheckpoints = btcConfig.trading.strategy === 'v2'
-  ? [75, 150, 220, 260]
-  : [75, 150, 220];
+const evalCheckpoints = btcConfig.trading.strategy === 'v4'
+  ? [60, 120, 180, 240, 270]
+  : btcConfig.trading.strategy === 'v2'
+    ? [75, 150, 220, 260]
+    : [75, 150, 220];
 let lastEvalCheckpoint: Record<number, number> = {}; // epoch -> last checkpoint index evaluated
 let lastSentiment: SentimentScore | null = null;
 let lastSentimentFetch = 0;
@@ -117,7 +126,11 @@ async function runDaemon() {
   }
 
   // Initialize strategy based on BTC_STRATEGY env var
-  if (btcConfig.trading.strategy === 'v2') {
+  if (btcConfig.trading.strategy === 'v4') {
+    strategy = new EnsembleV4Strategy();
+  } else if (btcConfig.trading.strategy === 'v3') {
+    strategy = new EnsembleV3Strategy();
+  } else if (btcConfig.trading.strategy === 'v2') {
     strategy = new EnsembleV2Strategy();
   } else {
     strategy = new EnsembleStrategy();
@@ -132,6 +145,13 @@ async function runDaemon() {
   priceFeed = new BinancePriceFeed();
   priceFeed.start();
   logger.info('Binance BTC/USDT price feed started');
+
+  // V4: start Binance L2 order book feed for microstructure signals
+  if (btcConfig.trading.strategy === 'v4') {
+    orderBookFeed = new BinanceOrderBookFeed();
+    orderBookFeed.start();
+    logger.info('Binance L2 order book feed started (V4 microstructure)');
+  }
 
   // Wait for first price
   await waitForPrice();
@@ -206,6 +226,7 @@ async function runDaemon() {
     logger.info('Shutting down BTC trader...');
     running = false;
     priceFeed.stop();
+    if (orderBookFeed) orderBookFeed.stop();
     clearInterval(mainInterval);
     clearInterval(redeemInterval);
     clearInterval(healthInterval);
@@ -243,14 +264,6 @@ async function tick() {
 
   const evalLabel = nextCheckpointIdx > 0 ? ` (re-eval #${nextCheckpointIdx})` : '';
   logger.info(`Processing window epoch ${currentEpoch}, ${secondsInto}s into window${evalLabel}`);
-
-  // Volatility gate: skip windows where BTC is not moving enough to exploit
-  const MIN_VOL_THRESHOLD = 0.0003; // 3 bps
-  const recentVol = priceFeed.getVolatility(300_000, 10_000);
-  if (recentVol < MIN_VOL_THRESHOLD && recentVol > 0) {
-    logger.info(`Skipping: volatility too low (${(recentVol * 10000).toFixed(1)}bps < ${(MIN_VOL_THRESHOLD * 10000).toFixed(0)}bps threshold)`);
-    return;
-  }
 
   const state = readState();
   if (nextCheckpointIdx === 0) state.todayStats.windowsProcessed++;
@@ -292,6 +305,13 @@ async function tick() {
   // Build features
   const candles = priceFeed.buildCandles(60_000, 20);
   const windowDurationMs = secondsInto * 1000;
+  const windowStartMs = currentEpoch * 1000;
+
+  // V4: compute microstructure features from Binance L2 book + trade flow
+  const microState = orderBookFeed
+    ? computeMicrostructureFeatures(orderBookFeed, priceFeed, windowStartMs)
+    : null;
+
   const ctx: FeatureBuildContext = {
     btcCandles: candles,
     windowEpoch: currentEpoch,
@@ -301,6 +321,7 @@ async function tick() {
     sentiment: lastSentiment,
     priceFeedReturn5m: priceFeed.getReturn(windowDurationMs),
     priceFeedReturn1m: priceFeed.getReturn(60_000),
+    microstructure: microState,
   };
   const features = buildFeatureVector(ctx);
 
@@ -311,6 +332,16 @@ async function tick() {
     `probDown=${features.impliedProbDown.toFixed(3)}, candles=${candles.length}, ` +
     `sentiment=${features.sentimentScore.toFixed(2)}, secInWindow=${features.secondsIntoWindow}`
   );
+
+  if (microState && microState.bookSynced) {
+    logger.info(
+      `Microstructure: OFI(30s/60s/300s)=${microState.ofi30s.toFixed(2)}/${microState.ofi60s.toFixed(2)}/${microState.ofi300s.toFixed(2)}, ` +
+      `TFI(30s/60s)=${microState.tradeFlowImbalance30s.toFixed(3)}/${microState.tradeFlowImbalance60s.toFixed(3)}, ` +
+      `microprice=${microState.micropriceEdge.toFixed(3)}, depth=${microState.depthSkew.toFixed(3)}, ` +
+      `volSurge=${microState.volumeSurge.toFixed(2)}, vwap=${microState.vwapDeviation.toFixed(6)}, ` +
+      `spread=${microState.spreadBps.toFixed(1)}bps(${microState.spreadRegime})`
+    );
+  }
 
   // Run each sub-strategy individually for logging
   let subDecisions: StrategyDecision[] = [];
@@ -324,6 +355,59 @@ async function tick() {
           `  [${sub.name}] ${subDec.direction} conf=${subDec.confidence.toFixed(3)} -- ${subDec.reasoning}`
         );
       }
+    }
+  }
+
+  // V4: pass microstructure state to strategy before decide()
+  if (strategy instanceof EnsembleV4Strategy && microState) {
+    (strategy as EnsembleV4Strategy).setMicrostructureState(microState);
+  }
+
+  // V5: call Inverse Cramer prediction before strategy runs
+  if (strategy instanceof EnsembleV5Strategy) {
+    const secondsRemaining = 300 - features.secondsIntoWindow;
+    const sentimentSummary = lastSentiment
+      ? lastSentiment.headlines.slice(-3).join('; ')
+      : '';
+    try {
+      const prediction = await inverseCramerPredict({
+        btcPrice: features.btcPrice,
+        btcReturn1m: features.btcReturn1m,
+        btcReturn5m: features.btcReturn5m,
+        windowReturn: features.windowReturn,
+        btcVolatility5m: features.btcVolatility5m,
+        impliedProbUp: features.impliedProbUp,
+        impliedProbDown: features.impliedProbDown,
+        secondsRemaining,
+        sentimentSummary,
+      });
+      (strategy as EnsembleV5Strategy).setPrediction(prediction);
+    } catch (err: any) {
+      logger.warn(`V5 Cramer prediction failed: ${err.message}`);
+    }
+  }
+
+  // V3: call Grok for AI prediction before strategy runs
+  if (strategy instanceof EnsembleV3Strategy) {
+    const secondsRemaining = 300 - features.secondsIntoWindow;
+    const sentimentSummary = lastSentiment
+      ? lastSentiment.headlines.slice(-3).join('; ')
+      : '';
+    try {
+      const prediction = await predictDirection({
+        btcPrice: features.btcPrice,
+        btcReturn1m: features.btcReturn1m,
+        btcReturn5m: features.btcReturn5m,
+        windowReturn: features.windowReturn,
+        btcVolatility5m: features.btcVolatility5m,
+        impliedProbUp: features.impliedProbUp,
+        impliedProbDown: features.impliedProbDown,
+        secondsRemaining,
+        sentimentSummary,
+      });
+      (strategy as EnsembleV3Strategy).setPrediction(prediction);
+    } catch (err: any) {
+      logger.warn(`V3 prediction failed: ${err.message}`);
     }
   }
 
@@ -344,11 +428,12 @@ async function tick() {
 
     const bal = await executor.getBalance();
 
-    // V2 proportional sizing: bet fraction of bankroll based on Kelly
+    // V2/V4 proportional sizing: bet fraction of bankroll based on Kelly
     // V1 fixed sizing: use budgetPerTrade
     let tradeBudget: number;
-    if (btcConfig.trading.strategy === 'v2' && decision.suggestedSize !== undefined) {
-      const kelly = Math.min(Math.max(decision.suggestedSize, 0), 1);
+    const useKellySizing = (btcConfig.trading.strategy === 'v2' || btcConfig.trading.strategy === 'v3' || btcConfig.trading.strategy === 'v4' || btcConfig.trading.strategy === 'v5') && decision.suggestedSize !== undefined;
+    if (useKellySizing) {
+      const kelly = Math.min(Math.max(decision.suggestedSize!, 0), 1);
       const { minBetFraction, maxBetFraction, minBalance } = btcConfig.trading;
       const fraction = minBetFraction + kelly * (maxBetFraction - minBetFraction);
       tradeBudget = bal.available * fraction;
@@ -359,7 +444,7 @@ async function tick() {
         writeState(state);
         return;
       }
-      logger.info(`V2 sizing: Kelly=${kelly.toFixed(3)}, fraction=${(fraction * 100).toFixed(1)}%, budget=$${tradeBudget.toFixed(2)} of $${bal.available.toFixed(2)}`);
+      logger.info(`Kelly sizing: Kelly=${kelly.toFixed(3)}, fraction=${(fraction * 100).toFixed(1)}%, budget=$${tradeBudget.toFixed(2)} of $${bal.available.toFixed(2)}`);
     } else {
       tradeBudget = btcConfig.trading.budgetPerTrade;
     }
@@ -421,9 +506,6 @@ async function tick() {
       btcPrice: features.btcPrice,
       btcReturn1m: features.btcReturn1m,
       btcReturn5m: features.btcReturn5m,
-      windowReturn: features.windowReturn,
-      btcVolatility5m: features.btcVolatility5m,
-      secondsIntoWindow: features.secondsIntoWindow,
       impliedProbUp: features.impliedProbUp,
       impliedProbDown: features.impliedProbDown,
       sentimentScore: features.sentimentScore,

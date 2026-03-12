@@ -72,6 +72,19 @@ export interface FeatureVector {
   hourOfDay: number;
   dayOfWeek: number;
   isWeekend: boolean;
+
+  // V4 microstructure fields (optional -- only populated when Binance L2 feed is active)
+  ofi30s?: number;
+  ofi60s?: number;
+  ofi300s?: number;
+  tradeFlowImbalance30s?: number;
+  tradeFlowImbalance60s?: number;
+  micropriceEdge?: number;
+  depthSkew?: number;
+  volumeSurge?: number;
+  vwapDeviation?: number;
+  spreadBps?: number;
+  spreadRegime?: 'tight' | 'normal' | 'wide';
 }
 
 export type Direction = 'up' | 'down' | 'abstain';

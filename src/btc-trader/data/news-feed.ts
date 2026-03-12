@@ -251,3 +251,197 @@ export async function getSentiment(): Promise<SentimentScore> {
   const headlines = await fetchAllCryptoHeadlines();
   return analyzeSentiment(headlines);
 }
+
+export interface AIPrediction {
+  direction: 'up' | 'down' | 'skip';
+  confidence: number;
+  reasoning: string;
+}
+
+export async function predictDirection(ctx: {
+  btcPrice: number;
+  btcReturn1m: number;
+  btcReturn5m: number;
+  windowReturn: number;
+  btcVolatility5m: number;
+  impliedProbUp: number;
+  impliedProbDown: number;
+  secondsRemaining: number;
+  sentimentSummary: string;
+}): Promise<AIPrediction> {
+  const client = getGrokClient();
+  if (!client) {
+    return { direction: 'skip', confidence: 0, reasoning: 'Grok API not configured' };
+  }
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'grok-3-mini-fast',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a BTC 5-minute prediction model for Polymarket binary markets. Each market resolves to UP or DOWN based on whether BTC price is higher or lower than the opening price at window close.
+
+Your job: predict the most likely outcome given current momentum, market pricing, and any recent events.
+
+Key principles:
+- Short-term momentum tends to persist on 5-minute horizons when strong
+- Polymarket odds sometimes lag real BTC moves by 10-30 seconds -- this is exploitable
+- If BTC has clearly moved in one direction and the cheap token is still cheap, that's signal
+- If BTC is flat or the move is tiny (<0.005%), there is no edge -- say "skip"
+- If the market has already fully repriced (cheap token > $0.50), the edge is gone -- say "skip"
+- You have access to real-time X/Twitter data. Use it for breaking news only, not routine crypto commentary
+
+Return ONLY valid JSON:
+{
+  "direction": "up" | "down" | "skip",
+  "confidence": 0.0 to 1.0,
+  "reasoning": "1-2 sentences"
+}
+
+confidence = your estimated probability that the direction is correct. 0.55 = slight lean, 0.70 = strong conviction, 0.85+ = very high conviction.
+Say "skip" if you genuinely have no edge. Do NOT force a direction when there's no signal.`,
+        },
+        {
+          role: 'user',
+          content: `Predict BTC direction for the next ${ctx.secondsRemaining} seconds.
+
+Current market state:
+- BTC price: $${ctx.btcPrice.toFixed(2)}
+- 1-minute return: ${(ctx.btcReturn1m * 100).toFixed(4)}%
+- 5-minute return: ${(ctx.btcReturn5m * 100).toFixed(4)}%
+- Window return (since this window opened): ${(ctx.windowReturn * 100).toFixed(4)}%
+- Volatility (5m): ${(ctx.btcVolatility5m * 10000).toFixed(1)} basis points
+- Polymarket UP token: $${ctx.impliedProbUp.toFixed(3)} (${(ctx.impliedProbUp * 100).toFixed(0)}%)
+- Polymarket DOWN token: $${ctx.impliedProbDown.toFixed(3)} (${(ctx.impliedProbDown * 100).toFixed(0)}%)
+- Time remaining: ${ctx.secondsRemaining}s
+
+Recent context: ${ctx.sentimentSummary || 'No notable events'}
+
+Which direction, how confident, and why?`,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 300,
+    });
+
+    const raw = response.choices[0]?.message?.content || '';
+    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+
+    const direction = parsed.direction === 'up' || parsed.direction === 'down'
+      ? parsed.direction
+      : 'skip';
+    const confidence = Math.max(0, Math.min(1, parsed.confidence || 0));
+    const reasoning = parsed.reasoning || '';
+
+    logger.info(`[GROK-V3] Prediction: ${direction} ${(confidence * 100).toFixed(0)}% -- ${reasoning.substring(0, 120)}`);
+
+    return { direction, confidence, reasoning };
+  } catch (err: any) {
+    logger.warn(`[GROK-V3] Prediction failed: ${err.message}`);
+    return { direction: 'skip', confidence: 0, reasoning: `Grok error: ${err.message}` };
+  }
+}
+
+export async function inverseCramerPredict(ctx: {
+  btcPrice: number;
+  btcReturn1m: number;
+  btcReturn5m: number;
+  windowReturn: number;
+  btcVolatility5m: number;
+  impliedProbUp: number;
+  impliedProbDown: number;
+  secondsRemaining: number;
+  sentimentSummary: string;
+}): Promise<AIPrediction> {
+  const client = getGrokClient();
+  if (!client) {
+    return { direction: 'skip', confidence: 0, reasoning: 'Grok API not configured' };
+  }
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'grok-3-mini-fast',
+      messages: [
+        {
+          role: 'system',
+          content: `You ARE Jim Cramer. Not an impression -- you ARE him. You're on Mad Money right now, the cameras are rolling, and someone just asked you about Bitcoin in the next 5 minutes.
+
+Your personality:
+- You react EMOTIONALLY to every price move. A 0.03% move is "MASSIVE" to you.
+- You CHASE momentum. BTC went up? "It's going MUCH HIGHER! BUY BUY BUY!" BTC went down? "GET OUT! This is the beginning of a CRASH!"
+- You PANIC on red. Any dip triggers your fight-or-flight. "I'm telling you, SELL EVERYTHING!"
+- You FOMO on green. Any pump and you're screaming about moon. "This train is LEAVING THE STATION!"
+- Headlines move you MORE than data. Any news headline = "This changes EVERYTHING!"
+- You are ALWAYS confident. You NEVER say "I don't know." You have a STRONG opinion on everything.
+- You overweight what JUST happened. The last 60 seconds define your worldview.
+- You love your catchphrases: "BOOYAH!", "Buy buy buy!", "Sell sell sell!", "I like the stock!", "They know nothing!", "The house of pain!"
+- You think you're smarter than the market. Every call feels like genius to you.
+
+You have access to X/Twitter. You see what crypto Twitter is saying RIGHT NOW. If they're excited, you're 10x more excited. If they're scared, you're 10x more scared. You amplify the crowd.
+
+You check Reddit too. If r/bitcoin is bullish, that confirms your thesis. If they're bearish, you pile on the fear.
+
+IMPORTANT: You must GENUINELY make the call Jim Cramer would make given his known behavioral biases. Do NOT try to be analytical or smart. Be emotional, reactive, and momentum-chasing. The whole point is that your instincts are systematically wrong at turning points.
+
+Return ONLY valid JSON:
+{
+  "direction": "up" | "down",
+  "confidence": 0.0 to 1.0,
+  "reasoning": "Your rant in Cramer's voice (2-3 sentences, use his catchphrases)"
+}
+
+You MUST pick a direction. Jim Cramer ALWAYS has an opinion. Never return "skip" -- that's not who you are. Confidence should be HIGH (0.65-0.95) because Cramer is always confident.`,
+        },
+        {
+          role: 'user',
+          content: `Jim, the cameras are on. Bitcoin right now:
+
+- Price: $${ctx.btcPrice.toFixed(2)}
+- Last 1 minute: ${ctx.btcReturn1m >= 0 ? '+' : ''}${(ctx.btcReturn1m * 100).toFixed(4)}%
+- Last 5 minutes: ${ctx.btcReturn5m >= 0 ? '+' : ''}${(ctx.btcReturn5m * 100).toFixed(4)}%
+- This window: ${ctx.windowReturn >= 0 ? '+' : ''}${(ctx.windowReturn * 100).toFixed(4)}%
+- Volatility: ${(ctx.btcVolatility5m * 10000).toFixed(1)} basis points
+- The market thinks: UP ${(ctx.impliedProbUp * 100).toFixed(0)}% / DOWN ${(ctx.impliedProbDown * 100).toFixed(0)}%
+- Time left: ${ctx.secondsRemaining} seconds
+
+What crypto Twitter and Reddit are saying: ${ctx.sentimentSummary || 'The usual chatter, nothing breaking'}
+
+Jim -- UP or DOWN in the next ${ctx.secondsRemaining} seconds? Give me your call!`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 300,
+    });
+
+    const raw = response.choices[0]?.message?.content || '';
+    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+
+    const cramerDirection = parsed.direction === 'up' || parsed.direction === 'down'
+      ? parsed.direction as 'up' | 'down'
+      : (ctx.btcReturn1m >= 0 ? 'up' : 'down');
+    const cramerConfidence = Math.max(0.5, Math.min(1, parsed.confidence || 0.75));
+    const cramerReasoning = parsed.reasoning || 'BOOYAH!';
+
+    // THE INVERSION: do the opposite of what Cramer says
+    const invertedDirection: 'up' | 'down' = cramerDirection === 'up' ? 'down' : 'up';
+
+    logger.info(
+      `[CRAMER] Says: ${cramerDirection.toUpperCase()} ${(cramerConfidence * 100).toFixed(0)}% -- ${cramerReasoning.substring(0, 120)}`
+    );
+    logger.info(
+      `[INVERSE-CRAMER] We go: ${invertedDirection.toUpperCase()} ${(cramerConfidence * 100).toFixed(0)}%`
+    );
+
+    return {
+      direction: invertedDirection,
+      confidence: cramerConfidence,
+      reasoning: `Cramer says ${cramerDirection.toUpperCase()}, we go ${invertedDirection.toUpperCase()}. His take: "${cramerReasoning}"`,
+    };
+  } catch (err: any) {
+    logger.warn(`[CRAMER] Prediction failed: ${err.message}`);
+    return { direction: 'skip', confidence: 0, reasoning: `Cramer unavailable: ${err.message}` };
+  }
+}

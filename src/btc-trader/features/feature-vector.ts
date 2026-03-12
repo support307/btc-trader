@@ -4,6 +4,7 @@ import {
   extractClosePrices, priceChangeFromWindowStart,
 } from './price-features';
 import { extractOrderbookFeatures, combinedImpliedProb } from './orderbook-features';
+import { MicrostructureState } from './microstructure-features';
 
 export interface FeatureBuildContext {
   btcCandles: OHLCV[];
@@ -14,6 +15,7 @@ export interface FeatureBuildContext {
   sentiment: SentimentScore | null;
   priceFeedReturn5m?: number;
   priceFeedReturn1m?: number;
+  microstructure?: MicrostructureState | null;
 }
 
 export function buildFeatureVector(ctx: FeatureBuildContext): FeatureVector {
@@ -62,6 +64,8 @@ export function buildFeatureVector(ctx: FeatureBuildContext): FeatureVector {
   const dayOfWeek = dt.getUTCDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
+  const micro = ctx.microstructure;
+
   return {
     timestamp: ctx.currentTimeMs,
     windowEpoch: ctx.windowEpoch,
@@ -85,5 +89,18 @@ export function buildFeatureVector(ctx: FeatureBuildContext): FeatureVector {
     hourOfDay,
     dayOfWeek,
     isWeekend,
+    ...(micro ? {
+      ofi30s: micro.ofi30s,
+      ofi60s: micro.ofi60s,
+      ofi300s: micro.ofi300s,
+      tradeFlowImbalance30s: micro.tradeFlowImbalance30s,
+      tradeFlowImbalance60s: micro.tradeFlowImbalance60s,
+      micropriceEdge: micro.micropriceEdge,
+      depthSkew: micro.depthSkew,
+      volumeSurge: micro.volumeSurge,
+      vwapDeviation: micro.vwapDeviation,
+      spreadBps: micro.spreadBps,
+      spreadRegime: micro.spreadRegime,
+    } : {}),
   };
 }

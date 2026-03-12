@@ -3,12 +3,17 @@ import { btcConfig } from '../config';
 import { logger } from '../clock/logger';
 import { PriceTick, OHLCV } from '../types';
 
+interface SignedTick extends PriceTick {
+  isBuyerAggressor: boolean;
+}
+
 const MAX_TICKS = 5000;
 const RECONNECT_DELAY = 3000;
 
 export class BinancePriceFeed {
   private ws: WebSocket | null = null;
   private ticks: PriceTick[] = [];
+  private signedTicks: SignedTick[] = [];
   private latestPrice = 0;
   private connected = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -51,10 +56,16 @@ export class BinancePriceFeed {
           price: parseFloat(data.p),
           volume: parseFloat(data.q),
         };
+        // Binance: m=true means buyer is maker, so aggressor is seller.
+        const isBuyerAggressor = data.m === false;
         this.latestPrice = tick.price;
         this.ticks.push(tick);
+        this.signedTicks.push({ ...tick, isBuyerAggressor });
         if (this.ticks.length > MAX_TICKS) {
           this.ticks = this.ticks.slice(-MAX_TICKS);
+        }
+        if (this.signedTicks.length > MAX_TICKS) {
+          this.signedTicks = this.signedTicks.slice(-MAX_TICKS);
         }
       } catch { /* skip malformed messages */ }
     });
@@ -144,6 +155,78 @@ export class BinancePriceFeed {
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
     return Math.sqrt(variance);
+  }
+
+  /**
+   * Trade Flow Imbalance: (buyVolume - sellVolume) / (buyVolume + sellVolume).
+   * Range: -1 (all sells) to +1 (all buys).
+   */
+  getTradeFlowImbalance(windowMs: number): number {
+    const cutoff = Date.now() - windowMs;
+    let buyVol = 0;
+    let sellVol = 0;
+    for (let i = this.signedTicks.length - 1; i >= 0; i--) {
+      const t = this.signedTicks[i];
+      if (t.timestamp < cutoff) break;
+      const vol = (t.volume || 0) * t.price;
+      if (t.isBuyerAggressor) buyVol += vol;
+      else sellVol += vol;
+    }
+    const total = buyVol + sellVol;
+    if (total === 0) return 0;
+    return (buyVol - sellVol) / total;
+  }
+
+  /**
+   * Volume surge: ratio of recent window volume to a longer baseline average.
+   * Returns >1 when current volume is above average, >2 = notable surge.
+   */
+  getVolumeSurge(windowMs: number, baselineMs: number): number {
+    const now = Date.now();
+    const recentCutoff = now - windowMs;
+    const baselineCutoff = now - baselineMs;
+
+    let recentVol = 0;
+    let baselineVol = 0;
+    for (let i = this.signedTicks.length - 1; i >= 0; i--) {
+      const t = this.signedTicks[i];
+      if (t.timestamp < baselineCutoff) break;
+      const vol = (t.volume || 0) * t.price;
+      baselineVol += vol;
+      if (t.timestamp >= recentCutoff) recentVol += vol;
+    }
+
+    if (baselineVol === 0) return 0;
+    const baselineRate = baselineVol / baselineMs;
+    const recentRate = recentVol / windowMs;
+    if (baselineRate === 0) return 0;
+    return recentRate / baselineRate;
+  }
+
+  /**
+   * VWAP since a given timestamp. Returns 0 if no ticks in range.
+   */
+  getVWAP(sinceMs: number): number {
+    let cumPriceVol = 0;
+    let cumVol = 0;
+    for (let i = this.signedTicks.length - 1; i >= 0; i--) {
+      const t = this.signedTicks[i];
+      if (t.timestamp < sinceMs) break;
+      const vol = t.volume || 0;
+      cumPriceVol += t.price * vol;
+      cumVol += vol;
+    }
+    if (cumVol === 0) return 0;
+    return cumPriceVol / cumVol;
+  }
+
+  /**
+   * VWAP deviation: (currentPrice - vwap) / currentPrice. Positive = price above VWAP.
+   */
+  getVWAPDeviation(sinceMs: number): number {
+    const vwap = this.getVWAP(sinceMs);
+    if (vwap === 0 || this.latestPrice === 0) return 0;
+    return (this.latestPrice - vwap) / this.latestPrice;
   }
 }
 

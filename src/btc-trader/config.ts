@@ -51,13 +51,13 @@ export const btcConfig = {
   get trading() {
     return {
       windowSeconds: 300,
-      strategy: env('BTC_STRATEGY', 'v1') as 'v1' | 'v2',
+      strategy: env('BTC_STRATEGY', 'v1') as 'v1' | 'v2' | 'v3' | 'v4' | 'v5',
       budgetPerTrade: Number(env('BTC_BUDGET_PER_TRADE', '2')),
       minConfidence: Number(env('BTC_MIN_CONFIDENCE', '0.60')),
       maxPositionsPerHour: Number(env('BTC_MAX_POSITIONS_PER_HOUR', '12')),
       dryRun: env('BTC_DRY_RUN', 'true') === 'true',
       executionAdapter: env('BTC_EXECUTION_ADAPTER', 'dry-run') as 'dry-run' | 'polymarket' | 'alpaca',
-      // V2 proportional sizing: bet 10-50% of bankroll based on Kelly
+      // V2/V4 proportional sizing: bet 10-50% of bankroll based on Kelly
       maxBetFraction: Number(env('BTC_MAX_BET_FRACTION', '0.50')),
       minBetFraction: Number(env('BTC_MIN_BET_FRACTION', '0.10')),
       minBalance: Number(env('BTC_MIN_BALANCE', '2.50')),
@@ -73,9 +73,14 @@ export const btcConfig = {
       'BTC_V2_DISCORD_WEBHOOK_URL',
       'https://discord.com/api/webhooks/1481417582719271012/rcALRfSrWj4aKCtEEYiO8R_PuWryLa7c9zMOU_g2jJaE2mk07l0eeTF0oRIgezDqvc7j'
     );
+    const v3Url = env('BTC_V3_DISCORD_WEBHOOK_URL', v1Url);
+    const v5Url = env('BTC_V5_DISCORD_WEBHOOK_URL', v1Url);
+    const v4Url = env('BTC_V4_DISCORD_WEBHOOK_URL', v1Url);
+    const urlMap: Record<string, string> = { v1: v1Url, v2: v2Url, v3: v3Url, v4: v4Url };
+    const labelMap: Record<string, string> = { v1: 'BTC Trader V1', v2: 'BTC Trader V2', v3: 'BTC Trader V3', v4: 'BTC Trader V4' };
     return {
-      discordWebhookUrl: strategy === 'v2' ? v2Url : v1Url,
-      strategyLabel: strategy === 'v2' ? 'BTC Trader V2' : 'BTC Trader V1',
+      discordWebhookUrl: urlMap[strategy] || v1Url,
+      strategyLabel: labelMap[strategy] || 'BTC Trader',
     };
   },
   get logLevel() {
