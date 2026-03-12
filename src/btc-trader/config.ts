@@ -58,7 +58,7 @@ export const btcConfig = {
       dryRun: env('BTC_DRY_RUN', 'true') === 'true',
       executionAdapter: env('BTC_EXECUTION_ADAPTER', 'dry-run') as 'dry-run' | 'polymarket' | 'alpaca',
       // V2/V4 proportional sizing: bet 10-50% of bankroll based on Kelly
-      maxBetFraction: Number(env('BTC_MAX_BET_FRACTION', '0.50')),
+      maxBetFraction: Number(env('BTC_MAX_BET_FRACTION', '0.30')),
       minBetFraction: Number(env('BTC_MIN_BET_FRACTION', '0.10')),
       minBalance: Number(env('BTC_MIN_BALANCE', '2.50')),
     };

@@ -22,6 +22,7 @@ export class EnsembleV3Strategy implements Strategy {
   private maxMarketPrice: number;
   private minConfidence: number;
   private kellyFraction = 0.25;
+  private maxKelly = 0.20;
 
   private lastPrediction: AIPrediction | null = null;
 
@@ -56,6 +57,15 @@ export class EnsembleV3Strategy implements Strategy {
     const confidence = prediction.confidence;
     const marketPrice = direction === 'up' ? features.impliedProbUp : features.impliedProbDown;
 
+    // Block contrarian bets (market 70%+ the other way) unless AI is highly confident
+    const isContrarian = marketPrice < 0.30;
+    const requiredConf = isContrarian ? 0.70 : this.minConfidence;
+    if (confidence < requiredConf) {
+      return abstain(this.name,
+        `Contrarian bet needs ${(requiredConf * 100).toFixed(0)}% conf, got ${(confidence * 100).toFixed(0)}%. Market: $${marketPrice.toFixed(3)}. ${prediction.reasoning}`
+      );
+    }
+
     if (marketPrice > this.maxMarketPrice) {
       return abstain(this.name,
         `Token too expensive: $${marketPrice.toFixed(3)} > $${this.maxMarketPrice.toFixed(2)}. AI said ${direction} ${(confidence * 100).toFixed(0)}%`
@@ -70,7 +80,13 @@ export class EnsembleV3Strategy implements Strategy {
 
     const edge = confidence - marketPrice;
     const odds = (1 - marketPrice) / marketPrice;
-    const kellySize = Math.max(0, (edge * odds)) * this.kellyFraction;
+    const rawKelly = Math.max(0, (edge * odds)) * this.kellyFraction;
+
+    // Reduce sizing late in window when market prices are more informative
+    const timeDecay = features.secondsIntoWindow <= 150
+      ? 1.0
+      : Math.max(0.3, 1.0 - (features.secondsIntoWindow - 150) / 200);
+    const kellySize = Math.min(rawKelly * timeDecay, this.maxKelly);
 
     return {
       direction,
